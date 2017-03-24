@@ -5,7 +5,7 @@
 extern crate iron;
 extern crate unicase;
 
-use iron::{ AfterMiddleware, headers};
+use iron::{AfterMiddleware, headers};
 use iron::method::Method;
 use iron::method::Method::*;
 use iron::prelude::*;
@@ -19,15 +19,13 @@ pub struct CORS {
     // Endpoints containing a variable path part can use ':foo' like in:
     // "/foo/:bar" for a URL like https://domain.com/foo/123 where 123 is
     // variable.
-    pub allowed_endpoints: Vec<CORSEndpoint>
+    pub allowed_endpoints: Vec<CORSEndpoint>,
 }
 
 impl CORS {
     #[allow(dead_code)]
     pub fn new(endpoints: Vec<CORSEndpoint>) -> Self {
-        CORS {
-            allowed_endpoints: endpoints
-        }
+        CORS { allowed_endpoints: endpoints }
     }
 
     pub fn is_allowed(&self, req: &mut Request) -> bool {
@@ -35,8 +33,7 @@ impl CORS {
         for endpoint in self.allowed_endpoints.clone() {
             let (methods, path) = endpoint;
 
-            if !methods.contains(&req.method) &&
-               req.method != Method::Options {
+            if !methods.contains(&req.method) && req.method != Method::Options {
                 continue;
             }
 
@@ -50,7 +47,10 @@ impl CORS {
                 continue;
             }
 
-            for (i, req_path) in req.url.path().iter().enumerate() {
+            for (i, req_path) in req.url
+                    .path()
+                    .iter()
+                    .enumerate() {
                 is_cors_endpoint = false;
                 if *req_path != path[i] && !path[i].starts_with(':') {
                     break;
@@ -73,15 +73,12 @@ impl CORS {
                 UniCase(String::from("content-type"))
             ]
         ));
-        res.headers.set(headers::AccessControlAllowMethods(
-            vec![Get, Post, Put, Delete]
-        ));
+        res.headers.set(headers::AccessControlAllowMethods(vec![Get, Post, Put, Delete]));
     }
 }
 
 impl AfterMiddleware for CORS {
-    fn after(&self, req: &mut Request, mut res: Response)
-        -> IronResult<Response> {
+    fn after(&self, req: &mut Request, mut res: Response) -> IronResult<Response> {
         if req.method == Method::Options {
             res = Response::with(Status::Ok);
         }
@@ -93,8 +90,7 @@ impl AfterMiddleware for CORS {
         Ok(res)
     }
 
-    fn catch(&self, req: &mut Request, mut err: IronError)
-        -> IronResult<Response> {
+    fn catch(&self, req: &mut Request, mut err: IronError) -> IronResult<Response> {
         if self.is_allowed(req) {
             CORS::add_headers(&mut err.response);
         }
