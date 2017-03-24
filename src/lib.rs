@@ -97,3 +97,130 @@ impl AfterMiddleware for CORS {
         Err(err)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    extern crate router;
+    extern crate hyper;
+    use iron::Listening;
+    use self::router::Router;
+    use iron::prelude::*;
+    use iron::status;
+    use self::hyper::Client;
+    use self::hyper::header::Headers;
+    use std::io::Read;
+    use iron::headers::{Origin, AccessControlRequestMethod, AccessControlAllowOrigin,
+                        AccessControlAllowHeaders, AccessControlMaxAge, AccessControlAllowMethods};
+    use iron::method::Method;
+    use super::CORS;
+    use std::str::FromStr;
+
+    struct AutoServer {
+        listening: Listening,
+        port: u16,
+    }
+
+    impl AutoServer {
+        pub fn new() -> AutoServer {
+            let mut router = Router::new();
+            let handler = |_: &mut Request| Ok(Response::with((status::ImATeapot, "")));
+            let cors = CORS::new(vec![(vec![Method::Get, Method::Post], "a".to_owned())]);
+            router.get("/a", handler, "get_a");
+            let mut chain = Chain::new(router);
+            chain.link_after(cors);
+            let l = Iron::new(chain).http(format!("localhost:0")).unwrap();
+            let p = l.socket.port();
+            AutoServer {
+                listening: l,
+                port: p,
+            }
+        }
+    }
+
+    impl Drop for AutoServer {
+        fn drop(&mut self) {
+            // Workaround for https://github.com/hyperium/hyper/issues/338
+            self.listening.close().unwrap();
+        }
+    }
+
+    #[test]
+    fn normal_request_possible() {
+        let server = AutoServer::new();
+        let client = Client::new();
+        let res = client.get(&format!("http://127.0.0.1:{}/a", server.port)).send().unwrap();
+        assert_eq!(res.status, status::ImATeapot);
+    }
+
+    #[test]
+    fn preflight_without_origin_is_bad_request() {
+        let server = AutoServer::new();
+        let client = Client::new();
+        let mut headers = Headers::new();
+        headers.set(AccessControlRequestMethod(Method::Get));
+        let mut res = client.request(Method::Options,
+                                     &format!("http://127.0.0.1:{}/a", server.port))
+            .headers(headers)
+            .send()
+            .unwrap();
+        assert_eq!(res.status, status::BadRequest);
+        let mut payload = String::new();
+        res.read_to_string(&mut payload).unwrap();
+        assert_eq!(payload, "Preflight request without Origin header");
+    }
+
+    #[test]
+    fn preflight_with_origin_accepts_same_origin() {
+        let server = AutoServer::new();
+        let client = Client::new();
+        let mut headers = Headers::new();
+        headers.set(AccessControlRequestMethod(Method::Get));
+        headers.set(Origin::from_str("http://www.a.com:8080").unwrap());
+        let res = client.request(Method::Options,
+                                 &format!("http://127.0.0.1:{}/a", server.port))
+            .headers(headers)
+            .send()
+            .unwrap();
+        assert_eq!(res.status, status::Ok);
+        let allow_origin = res.headers.get::<AccessControlAllowOrigin>().unwrap();
+        assert_eq!(format!("{}", allow_origin), "http://www.a.com:8080");
+        let allow_headers = res.headers.get::<AccessControlAllowHeaders>().unwrap();
+        assert_eq!(format!("{}", allow_headers),
+                   "Content-Type, X-Requested-With");
+        let allow_methods = res.headers.get::<AccessControlAllowMethods>().unwrap();
+        assert_eq!(format!("{}", allow_methods), "GET, PUT, POST");
+        let max_age = res.headers.get::<AccessControlMaxAge>().unwrap();
+        assert_eq!(max_age.0, 60 * 60u32);
+    }
+
+    #[test]
+    fn normal_request_allows_origin() {
+        let server = AutoServer::new();
+        let client = Client::new();
+        let mut headers = Headers::new();
+        headers.set(Origin::from_str("http://www.a.com:8080").unwrap());
+        let res = client.get(&format!("http://127.0.0.1:{}/a", server.port))
+            .headers(headers)
+            .send()
+            .unwrap();
+        assert_eq!(res.status, status::ImATeapot);
+        let allow_origin = res.headers.get::<AccessControlAllowOrigin>().unwrap();
+        assert_eq!(format!("{}", allow_origin), "*");
+        assert!(res.headers.get::<AccessControlAllowHeaders>().is_none());
+        assert!(res.headers.get::<AccessControlAllowMethods>().is_none());
+        assert!(res.headers.get::<AccessControlMaxAge>().is_none());
+    }
+
+    #[test]
+    fn normal_request_without_origin_is_passthrough() {
+        let server = AutoServer::new();
+        let client = Client::new();
+        let res = client.get(&format!("http://127.0.0.1:{}/a", server.port)).send().unwrap();
+        assert_eq!(res.status, status::ImATeapot);
+        assert!(res.headers.get::<AccessControlAllowOrigin>().is_none());
+        assert!(res.headers.get::<AccessControlAllowHeaders>().is_none());
+        assert!(res.headers.get::<AccessControlAllowMethods>().is_none());
+        assert!(res.headers.get::<AccessControlMaxAge>().is_none());
+    }
+
+}
